@@ -1,0 +1,11 @@
+{
+  "name": "grist-widget-grouped-view",
+  "version": "1.1.0",
+  "description": "Widget Grist « Vue groupée » — regroupement en accordéon des enregistrements",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
