@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Accordéon Diffusions V2.1</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#253344;background:#f7f9fc;font-size:13px}
+*{box-sizing:border-box}body{margin:0;padding:12px}button,select{font:inherit}
+.toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 12px;background:#fff;border:1px solid #e0e6ee;border-radius:9px;margin-bottom:12px}
+.toolbar label{display:flex;align-items:center;gap:7px;font-weight:600}
+select{padding:6px 9px;border:1px solid #bdc8d6;border-radius:5px;background:white}
+button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding:6px 9px;cursor:pointer}
+.count{margin-left:auto;color:#63748a;font-size:12px}
+.group{margin:7px 0;border:1px solid #dbe3ed;border-radius:8px;background:#fff;overflow:hidden}
+.group.level1{border-left:5px solid var(--category-color,#dbe3ed)}
+.group.level2,.group.level3{margin:7px 0 7px 13px;border-left:2px solid #dbe3ed}
+.group-header{display:flex;gap:9px;align-items:center;width:100%;border:0;background:#fff;text-align:left;padding:11px 12px;cursor:pointer;color:#263b51}
+.level1>.group-header{background:#f8fafc;font-weight:700}
+.level2>.group-header{background:#fbfcfe;font-weight:650}
+.group-header:hover{background:#eef5fc}.chevron{width:11px;display:inline-block;transition:transform .15s}
+.group-header[aria-expanded=true] .chevron{transform:rotate(90deg)}
+.badge{margin-left:auto;background:#edf2f7;border-radius:12px;padding:2px 9px;color:#465c73;font-size:12px}
+.group-body{padding:3px 9px 9px}.group-header[aria-expanded=false]+.group-body{display:none}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:10px;padding:8px}
+.resource{position:relative;border:1px solid #dbe4ed;border-radius:8px;background:#fff;padding:13px 14px;box-shadow:0 1px 3px #0000000b}
+.resource .fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px 16px}
+.field{min-width:0}.field.full{grid-column:1/-1}.field .label{font-size:11px;color:#64758a;margin-bottom:4px}.field .value{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.4}
+.field.title .value{font-weight:650;color:#172d46}.field a{color:#1265a8;text-decoration:underline}
+.info{position:absolute;right:9px;top:8px;color:#1871c7;background:#eaf4ff;border:0;border-radius:50%;width:19px;height:19px;font-weight:700;font-size:12px;cursor:help}
+.resource .fields{padding-right:15px}.empty{padding:30px 12px;text-align:center;color:#66778b}
+.error{padding:12px;border:1px solid #edb4b4;color:#a02626;background:#fff5f5;border-radius:8px}
+@media(max-width:420px){.resource .fields{grid-template-columns:1fr}.field{grid-column:1/-1}}
+</style></head><body>
+<div class="toolbar">
+<label>Troisième niveau <select id="level3"><option value="none">Aucun</option><option value="type">Type</option><option value="seance">Séance</option></select></label>
+<label><input type="checkbox" id="level2" checked> Niveau Cours</label>
+<button class="small" id="expand">Tout déplier</button><button class="small" id="collapse">Tout replier</button>
+<span class="count" id="count"></span>
+</div>
+<main id="content" aria-live="polite"><div class="empty">En attente des diffusions Grist…</div></main>
+<script type="module">
+import {esc, safeColor, groupRecords} from './groupes.logic.js';
+'use strict';
+const F={
+ category:'Cours_categorie_Ressource',course:'txt_Cours_Nom_complet',
+ type:'Type_Ressource',seance:'txt_Seance_Libelle',title:'txt_Titre_Ressource',
+ url:'URL_Ressource',owner:'txt_Proprietaire_Ressource',expiry:'Expire_le',
+ comment:'Commentaire_Ressource',state:'Etat',resourceRef:'txt_Reference_Ressource',
+ diffusionRef:'Reference',color:'Cours_CatCours'
+};
+const REQUIRED=Object.values(F);
+let records=[], opts={level2:true,level3:'none'}, openBranches=new Set(), initialized=false;
+const content=document.getElementById('content');
+function text(v){if(v===null||v===undefined)return '';if(Array.isArray(v))return v.slice(1).join(', ');return String(v);}
+function value(r,k){return text(r[F[k]]);}
+function groupLabel(r,key){const t=value(r,key).trim();return t||(key==='seance'?'Ressource diffusée hors séance':'Non renseigné');}
+function normalizeColor(v){
+ let x=text(v).trim();
+ if(/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(x))return x;
+ if(/^[0-9a-f]{6}$/i.test(x))return '#'+x;
+ return '#cbd5e1';
+}
+function urlValue(v){
+ const s=text(v).trim();
+ // Grist hyperlink cells may contain "label URL" separated by whitespace.
+ const m=s.match(/https?:\/\/[^\s]+/i);
+ if(!m)return null;
+ try{const u=new URL(m[0]);return ['http:','https:'].includes(u.protocol)?u.href:null;}catch{return null;}
+}
+function formatDate(v){
+ if(v===null||v===undefined||v==='')return '';
+ const n=Number(v);
+ if(Number.isFinite(n)&&String(v).trim()!=='')return new Intl.DateTimeFormat('fr-FR',{dateStyle:'short',timeStyle:'short'}).format(new Date(n*1000));
+ return text(v);
+}
+function field(label,body,full=false,title=false){return `<div class="field ${full?'full':''} ${title?'title':''}"><div class="label">${esc(label)}</div><div class="value">${body}</div></div>`;}
+function card(r){
+ const courseInLevel=opts.level2;
+ const third=courseInLevel?opts.level3:'none';
+ const url=urlValue(r[F.url]);
+ const link=url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(text(r[F.url]))}</a>`:esc(value(r,'url'));
+ const fields=[];
+ // Layout 1: no course level; layout 2: course level, no third; layout 3/4: third type or séance.
+ if(!courseInLevel){
+   fields.push(field('Cours',esc(value(r,'course'))));
+   fields.push(field('Séance',esc(value(r,'seance'))));
+   fields.push(field('Ressource',esc(value(r,'title')),true,true));
+   fields.push(field('Type',esc(value(r,'type'))));
+   fields.push(field('URL',link));
+ }else if(third==='none'){
+   fields.push(field('Séance',esc(value(r,'seance')),true));
+   fields.push(field('Ressource',esc(value(r,'title')),true,true));
+   fields.push(field('Type',esc(value(r,'type'))));
+   fields.push(field('URL',link));
+ }else if(third==='type'){
+   fields.push(field('Séance',esc(value(r,'seance')),true));
+   fields.push(field('Ressource',esc(value(r,'title')),true,true));
+   fields.push(field('URL',link,true));
+ }else{
+   fields.push(field('Ressource',esc(value(r,'title')),true,true));
+   fields.push(field('Type',esc(value(r,'type'))));
+   fields.push(field('URL',link));
+ }
+ fields.push(field('Propriétaire',esc(value(r,'owner'))));
+ fields.push(field('Expire le',esc(formatDate(r[F.expiry]))));
+ fields.push(field('Commentaire',esc(value(r,'comment')),true));
+ const ref=value(r,'resourceRef');
+ return `<article class="resource"><span class="info" tabindex="0" title="${esc(ref)}" aria-label="Référence ressource : ${esc(ref)}">i</span><div class="fields">${fields.join('')}</div></article>`;
+}
+function partition(rows,key){
+ // Réutilisation du moteur de regroupement et de tri de la V2 générique.
+ // La valeur de substitution est uniquement destinée au niveau Séance.
+ const normalized=rows.map(r=>({...r, __v21Group:groupLabel(r,key)}));
+ return groupRecords(normalized,'__v21Group','alpha-asc').map(g=>[
+   String(g.label),g.records.map(({__v21Group,...r})=>r)
+ ]);
+}
+function group(rows,key,depth,path){
+ return partition(rows,key).map(([label,items])=>{
+  const id=JSON.stringify([path,key,label]);
+  const expanded=openBranches.has(id);
+  const childKey=depth===1?(opts.level2?'course':null):depth===2?(opts.level3==='type'?'type':opts.level3==='seance'?'seance':null):null;
+  const inside=childKey?group(items,childKey,depth+1,id):`<div class="cards">${items.map(card).join('')}</div>`;
+  const style=depth===1?`style="--category-color:${normalizeColor(items[0][F.color])}"`:'';
+  return `<section class="group level${depth}" ${style}><button type="button" class="group-header" data-branch="${esc(id)}" aria-expanded="${expanded}" aria-controls="branch-${esc(encodeURIComponent(id))}"><span class="chevron" aria-hidden="true">▶</span><span>${esc(label)}</span><span class="badge">${items.length}</span></button><div class="group-body" id="branch-${esc(encodeURIComponent(id))}">${inside}</div></section>`;
+ }).join('');
+}
+function render(){
+ document.getElementById('count').textContent=records.length+' diffusion'+(records.length>1?'s':'');
+ if(!records.length){content.innerHTML='<div class="empty">Aucune diffusion transmise par Grist.</div>';return;}
+ const missing=REQUIRED.filter(k=>!(k in records[0]));
+ if(missing.length){content.innerHTML='<div class="error">Colonnes manquantes dans les données reçues : '+missing.map(esc).join(', ')+'. Vérifier les colonnes transmises au widget.</div>';return;}
+ content.innerHTML=group(records,'category',1,'root');
+ content.querySelectorAll('[data-branch]').forEach(btn=>btn.addEventListener('click',()=>{
+   const id=btn.dataset.branch;if(openBranches.has(id))openBranches.delete(id);else openBranches.add(id);
+   // Preserve scroll position on re-render.
+   const scroll=window.scrollY;render();window.scrollTo(0,scroll);
+ }));
+}
+function syncControls(){
+ document.getElementById('level2').checked=opts.level2;
+ document.getElementById('level3').value=opts.level3;
+ document.getElementById('level3').disabled=!opts.level2;
+}
+document.getElementById('level2').addEventListener('change',e=>{
+ opts.level2=e.target.checked;openBranches.clear();syncControls();grist.setOption('diffusionsV21',opts);render();
+});
+document.getElementById('level3').addEventListener('change',e=>{
+ opts.level3=e.target.value;openBranches.clear();grist.setOption('diffusionsV21',opts);render();
+});
+document.getElementById('expand').addEventListener('click',()=>{
+ // Gather all possible branch identifiers by opening all groups and reading them.
+ openBranches.clear();content.innerHTML=group(records,'category',1,'root');
+ content.querySelectorAll('[data-branch]').forEach(x=>openBranches.add(x.dataset.branch));render();
+});
+document.getElementById('collapse').addEventListener('click',()=>{openBranches.clear();render();});
+grist.ready({requiredAccess:'read table'});
+grist.onOptions(o=>{
+ const saved=o?.diffusionsV21;
+ if(saved){opts={level2:saved.level2!==false,level3:['none','type','seance'].includes(saved.level3)?saved.level3:'none'};}
+ syncControls();render();
+});
+grist.onRecords(rows=>{
+ records=rows||[];
+ // On initial visit all branches are collapsed; changes in records preserve user expansion.
+ initialized=true;render();
+});
+syncControls();
+</script></body></html>
