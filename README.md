@@ -1,4 +1,4 @@
-# Accordéon Diffusions — V2.1 (consultation)
+# Widget Grist Accordéon à trois niveaux — V2.1 (consultation)
 
 **Statut : version de consultation validée fonctionnellement le 25 octobre 2026.**
 
