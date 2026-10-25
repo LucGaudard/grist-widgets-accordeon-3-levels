@@ -307,6 +307,24 @@ async function refreshCache(){
  diffusionRows=new Map(toRows(dif).map(r=>[Number(r.id),r]));
  ownerRows=toRows(users);
 }
+// Lit les choix réels de Ressources.Type dans les métadonnées Grist.
+async function loadTypeChoices(){
+ const [tablesData,colsData]=await Promise.all([
+  grist.docApi.fetchTable('_grist_Tables'),
+  grist.docApi.fetchTable('_grist_Tables_column')
+ ]);
+ const tables=toRows(tablesData),cols=toRows(colsData);
+ const table=tables.find(t=>t.tableId==='Ressources');
+ if(!table)throw Error('Métadonnées de la table Ressources introuvables.');
+ const col=cols.find(c=>Number(c.parentId)===Number(table.id)&&c.colId==='Type');
+ if(!col||col.type!=='Choice')throw Error('Ressources.Type doit être une colonne Choix unique (Choice).');
+ let options;
+ try{options=typeof col.widgetOptions==='string'?JSON.parse(col.widgetOptions||'{}'):(col.widgetOptions||{});}
+ catch{throw Error('Options de Ressources.Type illisibles.');}
+ const choices=options.choices;
+ if(!Array.isArray(choices)||!choices.length||!choices.every(v=>typeof v==='string'))throw Error('Aucun choix valide trouvé dans Ressources.Type.');
+ return [...new Set(choices)];
+}
 function ownerLabel(u){return [u.Prenom,u.Nom].filter(Boolean).join(' ').trim()||String(u.Email||u.id);}
 function escAttr(v){return esc(String(v??''));}
 function parisInput(epoch){
@@ -371,10 +389,12 @@ async function openEditor(id){
   if(!Number.isInteger(rid)||rid<=0)throw Error('Référence Diffusions.Ressource indisponible ou non numérique.');
   const r=resourceRows.get(rid);
   if(!r)throw Error('Ressource liée introuvable ou non accessible.');
+  const allowedTypes=await loadTypeChoices();
+  const typeOptions=allowedTypes.map(v=>`<option value="${escAttr(v)}" ${String(r.Type??'')===v?'selected':''}>${esc(v)}</option>`).join('');
   const choices=ownerRows.map(u=>`<option value="${escAttr(u.id)}" ${Number(r.Propriete_de)===Number(u.id)?'selected':''}>${esc(ownerLabel(u))}</option>`).join('');
   modalBody.innerHTML=`<form class="edit-form" data-form="${diffusionId}">
    <label class="wide">Titre<input name="Titre" required value="${escAttr(r.Titre)}"></label>
-   <label>Type<input name="Type" value="${escAttr(r.Type)}"></label>
+   <label>Type<select name="Type" required><option value="" disabled ${!allowedTypes.includes(String(r.Type??''))?'selected':''}>— Choisir un type —</option>${typeOptions}</select></label>
    <label>URL<input name="URL" type="url" value="${escAttr(r.URL)}"></label>
    <label>Propriétaire<select name="Propriete_de"><option value="">— Aucun —</option>${choices}</select></label>
    <label>Expire le (Paris)<input name="Expire_le" type="datetime-local" value="${escAttr(parisInput(d.Expire_le))}"></label>
@@ -395,6 +415,8 @@ async function saveEditor(form,id,rid,oldR,oldD){
  try{
   const res={Titre:el('Titre').value.trim(),Type:el('Type').value.trim(),URL:el('URL').value.trim(),Commentaire:el('Commentaire').value,Propriete_de:el('Propriete_de').value?Number(el('Propriete_de').value):0};
   if(!res.Titre)throw Error('Le titre est obligatoire.');
+  const currentTypes=await loadTypeChoices();
+  if(!currentTypes.includes(res.Type))throw Error('Type non autorisé : choisissez une valeur actuellement définie dans Grist.');
   const expiry=parisEpoch(el('Expire_le').value);
   const changedR=Object.fromEntries(Object.entries(res).filter(([k,v])=>String(oldR[k]??(k==='Propriete_de'?0:''))!==String(v)));
   const expiryChanged=(oldD.Expire_le==null?null:Number(oldD.Expire_le))!==expiry;
