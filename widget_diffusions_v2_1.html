@@ -232,8 +232,17 @@ function render(){
  content.innerHTML=group(records,'category',1,'root');
  content.querySelectorAll('[data-branch]').forEach(btn=>btn.addEventListener('click',()=>{
    const id=btn.dataset.branch;if(openBranches.has(id))openBranches.delete(id);else openBranches.add(id);
-   // Preserve scroll position on re-render.
-   const scroll=getScrollY();render();setScrollY(scroll);saveNavigation();
+   // Le rendu remplace le bouton activé : rétablir explicitement son focus.
+   const scroll=getScrollY();
+   render();
+   const replacement=Array.from(content.querySelectorAll('[data-branch]'))
+     .find(candidate=>candidate.dataset.branch===id);
+   if(replacement){
+     try{replacement.focus({preventScroll:true});}
+     catch(e){replacement.focus();}
+   }
+   setScrollY(scroll);
+   saveNavigation();
  }));
 }
 function syncControls(){
