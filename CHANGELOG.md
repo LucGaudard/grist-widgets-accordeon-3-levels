@@ -1,30 +1,19 @@
-# Journal des modifications
+# Historique — Accordéon Diffusions V2.1
 
-Les versions suivent la numérotation sémantique (MAJEUR.MINEUR.CORRECTIF).
+## 2026-10-25 — version de consultation stabilisée
 
-## [1.1.0] — 2026-09-29
+- Catégorie et Cours permanents ; niveau 3 Aucun/Type/Séance.
+- Bandeau compact, compteur total, icône d'information et référence ressource.
+- Couleurs de catégorie sur tous les titres de niveau ; affichage mobile optimisé.
+- Persistance de navigation dans la session de l'onglet (classement, groupes, défilement).
+- URL « Ouvrir la ressource » ; libellé « Titre » et masquage si vide.
+- Correction du format d'expiration, rendu Markdown sécurisé et masquage des champs vides.
+- Grille de fiches adaptative (`auto-fit`).
+- Restauration du focus clavier sur le groupe activé.
+- Tests T07-C, T14 et clavier validés par l'utilisateur.
 
-### Modifié
-- La logique sans accès au DOM ni à l'API Grist (échappement, validation des couleurs, groupement, tri) est déplacée dans le module `groupes.logic.js`, importé par le widget. Comportement inchangé.
-- Les couleurs par défaut sont désormais attribuées après le tri des groupes, et non avant.
+## Hors périmètre de cette livraison
 
-### Ajouté
-- 11 tests unitaires exécutables par `npm test` (`node --test`), sans dépendance.
-- `package.json` et fichier `LICENSE` (MIT).
-
-## [1.0.0] — 2026-09-22
-
-Première version numérotée. Base commune avec le fork gristgouv (`gristgouv/main`, commit 1bd27cc).
-
-### Sécurité
-- Suppression du chargement de Google Fonts : le widget n'utilise plus que des polices système et n'émet plus aucune requête vers un service externe.
-- Validation des couleurs de groupe avant injection dans la page (`safeColor`).
-- Séparation des libellés bruts et échappés pour l'insertion en HTML.
-
-### Corrigé
-- Le groupe « (vide) » s'affiche de nouveau et conserve sa couleur après rechargement.
-
-### Ajouté
-- Numéro de version affiché en bas du panneau de réglages.
-- Ce journal des modifications.
-- Améliorations d'accessibilité.
+- Modification de la V2 générique.
+- Édition de `Ressources` (chantier ACC-022).
+- Validation approfondie des ACL et compatibilité lecteurs d'écran.
