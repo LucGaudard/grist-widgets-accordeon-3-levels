@@ -73,6 +73,17 @@ button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding
 }
 @media(max-width:345px){.group.level2,.group.level3{margin-left:0}.group-body{padding-left:2px;padding-right:2px}}
 
+/* Icône crayon et modale sur le modèle du Planning */
+.edit-open{position:absolute;right:9px;bottom:9px;border:1px solid #b9c9df;background:#fff;color:#385b80;border-radius:5px;width:28px;height:28px;display:grid;place-items:center;cursor:pointer}
+.edit-open:hover{background:#eaf4ff}
+.resource{padding-bottom:43px}
+.modal-backdrop[hidden]{display:none!important}
+.modal-backdrop{position:fixed;inset:0;z-index:1000;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal-panel{width:min(560px,100%);max-height:min(90vh,850px);overflow:auto;background:white;box-shadow:0 14px 40px #0003;padding:20px;border-radius:6px}
+.modal-panel h2{margin:0 0 14px;font-size:17px;color:#253344}
+.modal-panel .edit-form{gap:14px}
+.modal-panel .edit-form textarea{min-height:150px}
+.modal-panel .edit-actions{margin-top:14px}
 .edit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px;flex-wrap:wrap}
 .edit-actions button{border:1px solid #a6bdd6;background:#f5faff;color:#205d9e;border-radius:5px;padding:6px 11px;cursor:pointer}
 .edit-actions button.primary{background:#236eb8;color:white;border-color:#236eb8}
@@ -95,6 +106,7 @@ button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding
   <span class="count" id="count" aria-label="Nombre total de diffusions"></span>
 </div>
 <main id="content" aria-live="polite"><div class="empty">En attente des diffusions Grist…</div></main>
+<div id="editor-modal" class="modal-backdrop" hidden><section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title"><h2 id="modal-title">Modifier la ressource</h2><div id="modal-body"></div></section></div>
 <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 <script type="module">
@@ -108,7 +120,7 @@ const F={
  diffusionRef:'Reference',color:'Cours_CatCours',resourceId:'Ressource'
 };
 const REQUIRED=Object.values(F);
-let editingId=null, editingBusy=false;
+let editingId=null, editingBusy=false, editTrigger=null;
 let resourceRows=new Map(), diffusionRows=new Map(), ownerRows=[];
 let records=[], opts={level3:'seance'}, openBranches=new Set();
 // Navigation: l'API des options Grist est asynchrone et ses modifications
@@ -219,7 +231,7 @@ function card(r){
  const expiry=formatDate(r[F.expiry]);if(expiry)fields.push(field('Expire le',esc(expiry)));
  const comment=value(r,'comment');if(comment.trim())fields.push(field('Commentaire',markdown(comment),true,false,true));
  const ref=value(r,'resourceRef');
- return `<article class="resource" data-diffusion-id="${esc(r.id)}"><span class="info" tabindex="0" aria-label="Référence ressource : ${esc(ref)}" role="img">i</span><span class="info-tooltip" role="tooltip">${esc(ref)}</span><div class="fields">${fields.join('')}</div><div class="edit-actions"><button type="button" class="edit-open" data-edit="${esc(r.id)}" aria-label="Modifier cette ressource et sa date d'expiration">Modifier</button></div><div class="edit-slot" data-slot="${esc(r.id)}"></div></article>`;
+ return `<article class="resource" data-diffusion-id="${esc(r.id)}"><span class="info" tabindex="0" aria-label="Référence ressource : ${esc(ref)}" role="img">i</span><span class="info-tooltip" role="tooltip">${esc(ref)}</span><div class="fields">${fields.join('')}</div><button type="button" class="edit-open" data-edit="${esc(r.id)}" aria-label="Modifier cette ressource et sa date d'expiration" title="Modifier">✎</button></article>`;
 }
 function partition(rows,key){
  // Réutilisation du moteur de regroupement et de tri de la V2 générique.
@@ -316,22 +328,51 @@ function parisEpoch(local){
  if(matches.length>1)throw Error('Heure ambiguë lors du passage à l’heure d’hiver : choisir une autre heure.');
  return matches[0];
 }
+const modal=document.getElementById('editor-modal');
+const modalBody=document.getElementById('modal-body');
+function closeEditor(){
+ if(editingBusy)return;
+ modal.hidden=true;modalBody.innerHTML='';editingId=null;
+ if(editTrigger?.isConnected)editTrigger.focus({preventScroll:true});
+ editTrigger=null;
+}
+modal.addEventListener('click',e=>{if(e.target===modal)closeEditor();});
+document.addEventListener('keydown',e=>{
+ if(modal.hidden)return;
+ if(e.key==='Escape'){e.preventDefault();closeEditor();return;}
+ if(e.key==='Tab'){
+  const els=[...modal.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])')];
+  if(!els.length)return;
+  const first=els[0],last=els[els.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+ }
+});
 async function openEditor(id){
  if(editingBusy)return;
- const slot=document.querySelector(`[data-slot="${id}"]`);
- if(!slot)return;
- if(editingId!==null&&editingId!==id){const old=document.querySelector(`[data-slot="${editingId}"]`);if(old)old.innerHTML='';}
- editingId=id;slot.innerHTML='<div class="edit-status">Chargement des données…</div>';
+ editTrigger=document.activeElement;
+ editingId=id;modal.hidden=false;modalBody.innerHTML='<div class="edit-status">Chargement des données…</div>';
  try{
   await refreshCache();
-  const d=diffusionRows.get(id);
-  if(!d)throw Error('Diffusion introuvable ou non accessible.');
+  // Les lignes transmises au widget peuvent porter un identifiant de vue
+  // différent de l'identifiant réel de Diffusions. Résoudre par la référence
+  // métier de diffusion, jamais par le titre de la ressource.
+  const shown=records.find(x=>Number(x.id)===id);
+  if(!shown)throw Error('Ligne affichée introuvable.');
+  let d=diffusionRows.get(id);
+  const ref=String(shown[F.diffusionRef]??'').trim();
+  if(!d || (ref && String(d.Reference??'').trim()!==ref)){
+   const matches=[...diffusionRows.values()].filter(x=>ref && String(x.Reference??'').trim()===ref);
+   if(matches.length!==1)throw Error('Impossible d’identifier la diffusion de façon unique. Vérifier le mappage de la colonne Reference.');
+   d=matches[0];
+  }
+  const diffusionId=Number(d.id);
   const rid=Number(d.Ressource);
   if(!Number.isInteger(rid)||rid<=0)throw Error('Référence Diffusions.Ressource indisponible ou non numérique.');
   const r=resourceRows.get(rid);
   if(!r)throw Error('Ressource liée introuvable ou non accessible.');
   const choices=ownerRows.map(u=>`<option value="${escAttr(u.id)}" ${Number(r.Propriete_de)===Number(u.id)?'selected':''}>${esc(ownerLabel(u))}</option>`).join('');
-  slot.innerHTML=`<form class="edit-form" data-form="${id}">
+  modalBody.innerHTML=`<form class="edit-form" data-form="${diffusionId}">
    <label class="wide">Titre<input name="Titre" required value="${escAttr(r.Titre)}"></label>
    <label>Type<input name="Type" value="${escAttr(r.Type)}"></label>
    <label>URL<input name="URL" type="url" value="${escAttr(r.URL)}"></label>
@@ -341,11 +382,11 @@ async function openEditor(id){
    <div class="edit-actions" style="grid-column:1/-1"><button type="button" class="edit-cancel">Annuler</button><button class="primary" type="submit">Enregistrer</button></div>
    <div class="edit-status" style="grid-column:1/-1" role="status"></div>
   </form>`;
-  const form=slot.querySelector('form');
-  form.querySelector('.edit-cancel').addEventListener('click',()=>{slot.innerHTML='';editingId=null;});
-  form.addEventListener('submit',ev=>{ev.preventDefault();saveEditor(form,id,rid,r,d);});
+  const form=modalBody.querySelector('form');
+  form.querySelector('.edit-cancel').addEventListener('click',closeEditor);
+  form.addEventListener('submit',ev=>{ev.preventDefault();saveEditor(form,diffusionId,rid,r,d);});
   form.querySelector('[name="Titre"]').focus({preventScroll:true});
- }catch(e){slot.innerHTML=`<div class="edit-status error" role="alert">${esc(e.message)}</div>`;}
+ }catch(e){modalBody.innerHTML=`<div class="edit-status error" role="alert">${esc(e.message)}</div><div class="edit-actions"><button type="button" class="edit-cancel">Fermer</button></div>`;modalBody.querySelector('button').addEventListener('click',closeEditor);modalBody.querySelector('button').focus();}
 }
 async function saveEditor(form,id,rid,oldR,oldD){
  if(editingBusy)return;
@@ -368,7 +409,7 @@ async function saveEditor(form,id,rid,oldR,oldD){
   status.className='edit-status ok';status.textContent='Modifications enregistrées.';
   await refreshCache();
   editingId=null;
-  setTimeout(()=>{const slot=document.querySelector(`[data-slot="${id}"]`);if(slot)slot.innerHTML='';},900);
+  setTimeout(()=>{if(!editingBusy){modal.hidden=true;modalBody.innerHTML='';if(editTrigger?.isConnected)editTrigger.focus({preventScroll:true});editTrigger=null;}},900);
  }catch(e){status.className='edit-status error';status.textContent='Enregistrement refusé : '+e.message;}
  finally{editingBusy=false;form.querySelectorAll('button,input,select,textarea').forEach(x=>x.disabled=false);}
 }
