@@ -13,7 +13,26 @@
 .toolbar select{color:#3675d6;border-color:#9dbbf4}
 .toolbar button.small{display:inline-flex;align-items:center;gap:5px;color:#3675d6;border-color:#9dbbf4;padding:7px 10px}
 .toolbar button.small svg{width:15px;height:15px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
-@media(max-width:570px){.toolbar{justify-content:space-between}.toolbar-center{order:3;width:100%;justify-content:center;margin:3px 0 0}.toolbar .count{margin-left:auto}}
+/* Le bandeau compact reste sur une seule ligne, sans sacrifier la largeur des fiches. */
+@media(max-width:620px){
+ .toolbar{flex-wrap:nowrap;gap:7px;padding:9px 10px}
+ .toolbar-left{gap:6px;min-width:0;flex:0 1 auto}
+ .toolbar label{gap:0;white-space:nowrap;font-size:11px}
+ .toolbar select{min-width:0;max-width:90px;padding:5px 5px;font-size:11px}
+ .toolbar-center{order:0;width:auto;flex:0 0 auto;justify-content:center;margin:0 auto;gap:6px}
+ .toolbar button.small{padding:5px;width:25px;height:27px;justify-content:center}
+ .toolbar button.small .button-label{display:none}
+ .toolbar button.small svg{width:15px;height:15px;flex-shrink:0}
+ .toolbar .count{margin-left:0;flex:0 0 auto;padding:3px 7px;font-size:11px}
+}
+@media(max-width:345px){
+ body{padding:8px}
+ .toolbar{padding:8px 7px;gap:5px}
+ .toolbar-left{gap:4px}
+ .toolbar select{max-width:76px}
+ .toolbar-center{gap:3px}
+ .toolbar button.small{width:23px}
+}
 select{padding:6px 9px;border:1px solid #bdc8d6;border-radius:5px;background:white}
 button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding:6px 9px;cursor:pointer}
 .count{margin-left:auto;background:#edf2f7;border-radius:12px;padding:3px 10px;color:#465c73;font-size:12px;font-weight:600}
@@ -32,7 +51,7 @@ button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding
 .resource .fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px 16px}
 .field{min-width:0}.field.full{grid-column:1/-1}.field .label{font-size:11px;color:#64758a;margin-bottom:4px}.field .value{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.4}
 .field.title .value{font-weight:650;color:#172d46}.field a{color:#1265a8;text-decoration:underline}
-.info{position:absolute;right:9px;top:8px;color:#1871c7;background:#eaf4ff;border:0;border-radius:50%;width:17px;height:17px;font-weight:700;font-size:12px;cursor:default}
+.info{position:absolute;right:9px;top:8px;color:#6ca8e9;background:#eaf4ff;border:0;border-radius:50%;width:17px;height:17px;font-weight:700;font-size:12px;cursor:default}
 /* Info-bulle explicite : pas de curseur « ? » ni de délai du title natif. */
 .info{font-family:Georgia,"Times New Roman",serif;font-style:italic;font-weight:700;font-size:14px;line-height:17px;text-align:center;padding:0;cursor:default}
 .info-tooltip{position:absolute;z-index:5;right:7px;top:32px;background:#173b68;color:#fff;border-radius:6px;padding:7px 10px;font:12px system-ui,sans-serif;white-space:nowrap;max-width:min(90%,280px);overflow-wrap:anywhere;box-shadow:0 3px 12px #0002;opacity:0;visibility:hidden;transition:opacity .12s;pointer-events:none}
@@ -44,8 +63,8 @@ button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding
 <div class="toolbar">
   <div class="toolbar-left"><label for="level3">Classer par</label><select id="level3" aria-label="Classer par"><option value="none">Aucun</option><option value="type">Type</option><option value="seance">Séance</option></select></div>
   <div class="toolbar-center">
-    <button class="small" id="expand" type="button">Tout déplier <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 6 5 5 5-5M7 13l5 5 5-5"/></svg></button>
-    <button class="small" id="collapse" type="button">Tout replier <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 11 5-5 5 5M7 18l5-5 5 5"/></svg></button>
+    <button class="small" id="expand" type="button" title="Tout déplier" aria-label="Tout déplier"><span class="button-label">Tout déplier</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 6 5 5 5-5M7 13l5 5 5-5"/></svg></button>
+    <button class="small" id="collapse" type="button" title="Tout replier" aria-label="Tout replier"><span class="button-label">Tout replier</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 11 5-5 5 5M7 18l5-5 5 5"/></svg></button>
   </div>
   <span class="count" id="count" aria-label="Nombre total de diffusions"></span>
 </div>
@@ -61,7 +80,7 @@ const F={
  diffusionRef:'Reference',color:'Cours_CatCours'
 };
 const REQUIRED=Object.values(F);
-let records=[], opts={level3:'none'}, openBranches=new Set();
+let records=[], opts={level3:'seance'}, openBranches=new Set();
 const content=document.getElementById('content');
 function text(v){if(v===null||v===undefined)return '';if(Array.isArray(v))return v.slice(1).join(', ');return String(v);}
 function value(r,k){return text(r[F[k]]);}
@@ -157,7 +176,7 @@ document.getElementById('collapse').addEventListener('click',()=>{openBranches.c
 grist.ready({requiredAccess:'read table'});
 grist.onOptions(o=>{
  const saved=o?.diffusionsV21;
- if(saved){opts={level3:['none','type','seance'].includes(saved.level3)?saved.level3:'none'};}
+ if(saved){opts={level3:['none','type','seance'].includes(saved.level3)?saved.level3:'seance'};}
  syncControls();render();
 });
 grist.onRecords(rows=>{
