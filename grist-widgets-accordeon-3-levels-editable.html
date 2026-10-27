@@ -111,6 +111,7 @@ button.small{border:1px solid #cdd7e2;border-radius:5px;background:white;padding
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
 <script type="module">
 import {esc, safeColor, groupRecords} from './groupes.logic.js';
+import {loadContext, uiPermissions} from './contexte-widget.js';
 'use strict';
 const F={
  category:'Cours_categorie_Ressource',course:'txt_Cours_Nom_complet',
@@ -122,6 +123,7 @@ const F={
 const REQUIRED=Object.values(F);
 let editingId=null, editingBusy=false, editTrigger=null;
 let resourceRows=new Map(), diffusionRows=new Map(), ownerRows=[];
+let currentContext=null, currentUser=null, contextPromise=null;
 let records=[], opts={level3:'seance'}, openBranches=new Set();
 // Navigation: l'API des options Grist est asynchrone et ses modifications
 // peuvent rester temporaires jusqu'à validation dans la barre du widget.
@@ -231,7 +233,11 @@ function card(r){
  const expiry=formatDate(r[F.expiry]);if(expiry)fields.push(field('Expire le',esc(expiry)));
  const comment=value(r,'comment');if(comment.trim())fields.push(field('Commentaire',markdown(comment),true,false,true));
  const ref=value(r,'resourceRef');
- return `<article class="resource" data-diffusion-id="${esc(r.id)}"><span class="info" tabindex="0" aria-label="Référence ressource : ${esc(ref)}" role="img">i</span><span class="info-tooltip" role="tooltip">${esc(ref)}</span><div class="fields">${fields.join('')}</div><button type="button" class="edit-open" data-edit="${esc(r.id)}" aria-label="Modifier cette ressource et sa date d'expiration" title="Modifier">✎</button></article>`;
+ const d=[...diffusionRows.values()].find(row=>String(row.Reference||'')===String(r[F.diffusionRef]||''));
+ const resource=d && resourceRows.get(Number(d.Ressource));
+ const can=uiPermissions(currentContext,currentUser,resource,d);
+ const editButton=(can.resource||can.expiry)?`<button type="button" class="edit-open" data-edit="${esc(r.id)}" aria-label="Modifier cette ressource et sa date d'expiration" title="Modifier">✎</button>`:'';
+ return `<article class="resource" data-diffusion-id="${esc(r.id)}"><span class="info" tabindex="0" aria-label="Référence ressource : ${esc(ref)}" role="img">i</span><span class="info-tooltip" role="tooltip">${esc(ref)}</span><div class="fields">${fields.join('')}</div>${editButton}</article>`;
 }
 function partition(rows,key){
  // Réutilisation du moteur de regroupement et de tri de la V2 générique.
@@ -306,6 +312,11 @@ async function refreshCache(){
  resourceRows=new Map(toRows(res).map(r=>[Number(r.id),r]));
  diffusionRows=new Map(toRows(dif).map(r=>[Number(r.id),r]));
  ownerRows=toRows(users);
+ currentUser=ownerRows.find(u=>String(u.Email||'').toLowerCase()===String(currentContext?.email||'').toLowerCase())||null;
+}
+async function ensureContext(){
+ if(!contextPromise)contextPromise=loadContext(grist.docApi).then(ctx=>{currentContext=ctx;return ctx;});
+ return contextPromise;
 }
 // Lit les choix réels de Ressources.Type dans les métadonnées Grist.
 async function loadTypeChoices(){
@@ -389,6 +400,8 @@ async function openEditor(id){
   if(!Number.isInteger(rid)||rid<=0)throw Error('Référence Diffusions.Ressource indisponible ou non numérique.');
   const r=resourceRows.get(rid);
   if(!r)throw Error('Ressource liée introuvable ou non accessible.');
+  const can=uiPermissions(currentContext,currentUser,r,d);
+  if(!can.resource && !can.expiry)throw Error('Vous ne pouvez pas modifier cette ressource ou cette diffusion.');
   const allowedTypes=await loadTypeChoices();
   const typeOptions=allowedTypes.map(v=>`<option value="${escAttr(v)}" ${String(r.Type??'')===v?'selected':''}>${esc(v)}</option>`).join('');
   const choices=ownerRows.map(u=>`<option value="${escAttr(u.id)}" ${Number(r.Propriete_de)===Number(u.id)?'selected':''}>${esc(ownerLabel(u))}</option>`).join('');
@@ -403,23 +416,26 @@ async function openEditor(id){
    <div class="edit-status" style="grid-column:1/-1" role="status"></div>
   </form>`;
   const form=modalBody.querySelector('form');
+  for(const name of ['Titre','Type','URL','Commentaire','Propriete_de'])form.elements.namedItem(name).disabled=!can.resource;
+  form.elements.namedItem('Expire_le').disabled=!can.expiry;
   form.querySelector('.edit-cancel').addEventListener('click',closeEditor);
   form.addEventListener('submit',ev=>{ev.preventDefault();saveEditor(form,diffusionId,rid,r,d);});
-  form.querySelector('[name="Titre"]').focus({preventScroll:true});
+  (form.querySelector('input:not([disabled]),select:not([disabled]),textarea:not([disabled])')||form.querySelector('.edit-cancel')).focus({preventScroll:true});
  }catch(e){modalBody.innerHTML=`<div class="edit-status error" role="alert">${esc(e.message)}</div><div class="edit-actions"><button type="button" class="edit-cancel">Fermer</button></div>`;modalBody.querySelector('button').addEventListener('click',closeEditor);modalBody.querySelector('button').focus();}
 }
 async function saveEditor(form,id,rid,oldR,oldD){
  if(editingBusy)return;
+ const priorDisabled=new Map([...form.querySelectorAll('button,input,select,textarea')].map(x=>[x,x.disabled]));
  const el=n=>form.elements.namedItem(n);
  const status=form.querySelector('.edit-status');
  try{
   const res={Titre:el('Titre').value.trim(),Type:el('Type').value.trim(),URL:el('URL').value.trim(),Commentaire:el('Commentaire').value,Propriete_de:el('Propriete_de').value?Number(el('Propriete_de').value):0};
-  if(!res.Titre)throw Error('Le titre est obligatoire.');
+  if(!el('Titre').disabled && !res.Titre)throw Error('Le titre est obligatoire.');
   const currentTypes=await loadTypeChoices();
-  if(!currentTypes.includes(res.Type))throw Error('Type non autorisé : choisissez une valeur actuellement définie dans Grist.');
-  const expiry=parisEpoch(el('Expire_le').value);
-  const changedR=Object.fromEntries(Object.entries(res).filter(([k,v])=>String(oldR[k]??(k==='Propriete_de'?0:''))!==String(v)));
-  const expiryChanged=(oldD.Expire_le==null?null:Number(oldD.Expire_le))!==expiry;
+  if(!el('Type').disabled && !currentTypes.includes(res.Type))throw Error('Type non autorisé : choisissez une valeur actuellement définie dans Grist.');
+  const expiry=el('Expire_le').disabled ? null : parisEpoch(el('Expire_le').value);
+  const changedR=Object.fromEntries(Object.entries(res).filter(([k,v])=>!el(k).disabled && String(oldR[k]??(k==='Propriete_de'?0:''))!==String(v)));
+  const expiryChanged=!el('Expire_le').disabled && (oldD.Expire_le==null?null:Number(oldD.Expire_le))!==expiry;
   if(!Object.keys(changedR).length&&!expiryChanged){status.textContent='Aucune modification.';return;}
   editingBusy=true;form.querySelectorAll('button,input,select,textarea').forEach(x=>x.disabled=true);
   status.className='edit-status';status.textContent='Enregistrement…';
@@ -433,7 +449,7 @@ async function saveEditor(form,id,rid,oldR,oldD){
   editingId=null;
   setTimeout(()=>{if(!editingBusy){modal.hidden=true;modalBody.innerHTML='';if(editTrigger?.isConnected)editTrigger.focus({preventScroll:true});editTrigger=null;}},900);
  }catch(e){status.className='edit-status error';status.textContent='Enregistrement refusé : '+e.message;}
- finally{editingBusy=false;form.querySelectorAll('button,input,select,textarea').forEach(x=>x.disabled=false);}
+ finally{editingBusy=false;for(const [element,disabled] of priorDisabled)element.disabled=disabled;}
 }
 
 grist.ready({requiredAccess:'full'});
@@ -444,7 +460,7 @@ grist.onOptions(o=>{
  optionsReceived=true;initializeNavigation();
 });
 grist.onRecords(rows=>{
- records=rows||[];recordsReceived=true;refreshCache().catch(e=>console.warn('Cache édition',e));
+ records=rows||[];recordsReceived=true;ensureContext().then(refreshCache).then(()=>render()).catch(e=>{console.warn('Contexte édition indisponible',e);render();});
  if(optionsReceived)initializeNavigation();
  else render();
  if(navigationRestored){render();restoreScroll();}
